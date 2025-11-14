@@ -125,6 +125,15 @@ export enum EventType {
   LOGIN_SUCCESS = 'auth.login_success',
   LOGIN_FAILED = 'auth.login_failed',
   LOGOUT = 'auth.logout',
+
+  // Offline sync events
+  SYNC_STARTED = 'sync.started',
+  SYNC_COMPLETED = 'sync.completed',
+  SYNC_FAILED = 'sync.failed',
+  SYNC_CONFLICT = 'sync.conflict',
+  CONNECTION_ONLINE = 'connection.online',
+  CONNECTION_OFFLINE = 'connection.offline',
+  CONNECTION_UNSTABLE = 'connection.unstable',
 }
 
 // ==========================================
