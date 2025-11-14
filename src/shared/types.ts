@@ -73,6 +73,16 @@ export enum EventType {
   // Payment events
   PAYMENT_PROCESSED = 'payment.processed',
   PAYMENT_FAILED = 'payment.failed',
+  PAYMENT_COMPLETED = 'payment.completed',
+  PAYMENT_REFUNDED = 'payment.refunded',
+
+  // Order events (additional)
+  ORDER_CREATED = 'order.created',
+  ORDER_UPDATED = 'order.updated',
+  AGE_VERIFIED = 'order.age_verified',
+
+  // Inventory events (additional)
+  LOW_STOCK_ALERT = 'inventory.low_stock_alert',
 
   // Sync events
   ELISTAR_IMPORT_STARTED = 'elistar.import.started',
