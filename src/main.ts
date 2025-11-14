@@ -6,6 +6,12 @@ import { log } from './shared/logger';
 import { db } from './shared/database';
 import { ElistarSyncService } from './services/elistar-sync/elistar-sync-service';
 import { ProductService } from './services/product/product-service';
+import { OrderAggregationService } from './services/order-aggregation/order-aggregation-service';
+import { CartService } from './services/pos-terminal/cart-service';
+import { PaymentService } from './services/payment/payment-service';
+import { ReceiptService } from './services/receipt/receipt-service';
+import { DoorDashConnector } from './services/channels/doordash-connector';
+import { UberEatsConnector } from './services/channels/uber-eats-connector';
 
 /**
  * OpenCommerce POS - Main Application
@@ -15,6 +21,12 @@ import { ProductService } from './services/product/product-service';
 const app = express();
 const elistar = new ElistarSyncService();
 const productService = new ProductService();
+const orderService = new OrderAggregationService();
+const cartService = new CartService();
+const paymentService = new PaymentService();
+const receiptService = new ReceiptService();
+const doordash = new DoorDashConnector();
+const uber = new UberEatsConnector();
 
 // Middleware
 app.use(helmet());
@@ -162,6 +174,363 @@ app.get('/api/products/search', async (req: Request, res: Response) => {
   } catch (error) {
     log.error('Product search failed', error);
     res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// ==========================================
+// ORDER MANAGEMENT API
+// ==========================================
+
+/**
+ * Get today's order queue (unified view)
+ * GET /api/orders/today
+ */
+app.get('/api/orders/today', async (req: Request, res: Response) => {
+  try {
+    const orders = await orderService.getTodaysOrders();
+    res.json(orders);
+  } catch (error) {
+    log.error('Failed to get orders', error);
+    res.status(500).json({ error: 'Failed to get orders' });
+  }
+});
+
+/**
+ * Get order by ID
+ * GET /api/orders/:id
+ */
+app.get('/api/orders/:id', async (req: Request, res: Response) => {
+  try {
+    const order = await orderService.getOrder(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    res.json(order);
+  } catch (error) {
+    log.error('Failed to get order', error);
+    res.status(500).json({ error: 'Failed to get order' });
+  }
+});
+
+/**
+ * Update order status
+ * PATCH /api/orders/:id/status
+ */
+app.patch('/api/orders/:id/status', async (req: Request, res: Response) => {
+  try {
+    const { status, userId } = req.body;
+    await orderService.updateOrderStatus(req.params.id, status, userId);
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Failed to update order status', error);
+    res.status(500).json({ error: 'Failed to update status' });
+  }
+});
+
+/**
+ * Record age verification
+ * POST /api/orders/:id/verify-age
+ */
+app.post('/api/orders/:id/verify-age', async (req: Request, res: Response) => {
+  try {
+    const { driverLicenseNumber, verifiedBy } = req.body;
+    await orderService.recordAgeVerification(
+      req.params.id,
+      driverLicenseNumber,
+      verifiedBy
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Failed to record age verification', error);
+    res.status(500).json({ error: 'Failed to record verification' });
+  }
+});
+
+// ==========================================
+// POS CART API
+// ==========================================
+
+/**
+ * Create new cart (start transaction)
+ * POST /api/cart
+ */
+app.post('/api/cart', async (req: Request, res: Response) => {
+  try {
+    const cartId = cartService.createCart();
+    res.json({ cartId });
+  } catch (error) {
+    log.error('Failed to create cart', error);
+    res.status(500).json({ error: 'Failed to create cart' });
+  }
+});
+
+/**
+ * Add item to cart by barcode (scan)
+ * POST /api/cart/:cartId/items
+ */
+app.post('/api/cart/:cartId/items', async (req: Request, res: Response) => {
+  try {
+    const { barcode, quantity = 1 } = req.body;
+    const cart = await cartService.addItemByBarcode(
+      req.params.cartId,
+      barcode,
+      quantity
+    );
+    res.json(cart);
+  } catch (error) {
+    log.error('Failed to add item to cart', error);
+    res.status(500).json({ error: 'Failed to add item' });
+  }
+});
+
+/**
+ * Update item quantity
+ * PATCH /api/cart/:cartId/items/:barcode
+ */
+app.patch('/api/cart/:cartId/items/:barcode', async (req: Request, res: Response) => {
+  try {
+    const { quantity } = req.body;
+    const cart = await cartService.updateQuantity(
+      req.params.cartId,
+      req.params.barcode,
+      quantity
+    );
+    res.json(cart);
+  } catch (error) {
+    log.error('Failed to update quantity', error);
+    res.status(500).json({ error: 'Failed to update quantity' });
+  }
+});
+
+/**
+ * Remove item from cart
+ * DELETE /api/cart/:cartId/items/:barcode
+ */
+app.delete('/api/cart/:cartId/items/:barcode', async (req: Request, res: Response) => {
+  try {
+    const cart = await cartService.removeItem(
+      req.params.cartId,
+      req.params.barcode
+    );
+    res.json(cart);
+  } catch (error) {
+    log.error('Failed to remove item', error);
+    res.status(500).json({ error: 'Failed to remove item' });
+  }
+});
+
+/**
+ * Get cart
+ * GET /api/cart/:cartId
+ */
+app.get('/api/cart/:cartId', async (req: Request, res: Response) => {
+  try {
+    const cart = cartService.getCart(req.params.cartId);
+    if (!cart) {
+      return res.status(404).json({ error: 'Cart not found' });
+    }
+    res.json(cart);
+  } catch (error) {
+    log.error('Failed to get cart', error);
+    res.status(500).json({ error: 'Failed to get cart' });
+  }
+});
+
+/**
+ * Clear cart (void)
+ * DELETE /api/cart/:cartId
+ */
+app.delete('/api/cart/:cartId', async (req: Request, res: Response) => {
+  try {
+    const { reason, managerId } = req.body;
+    await cartService.voidCart(req.params.cartId, reason, managerId);
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Failed to void cart', error);
+    res.status(500).json({ error: 'Failed to void cart' });
+  }
+});
+
+// ==========================================
+// PAYMENT API
+// ==========================================
+
+/**
+ * Process card payment
+ * POST /api/payment/card
+ */
+app.post('/api/payment/card', async (req: Request, res: Response) => {
+  try {
+    const { transactionId, amount, terminalId } = req.body;
+    const result = await paymentService.processCardPayment(
+      transactionId,
+      amount,
+      terminalId
+    );
+    res.json(result);
+  } catch (error) {
+    log.error('Card payment failed', error);
+    res.status(500).json({ error: 'Payment failed' });
+  }
+});
+
+/**
+ * Process cash payment
+ * POST /api/payment/cash
+ */
+app.post('/api/payment/cash', async (req: Request, res: Response) => {
+  try {
+    const { transactionId, totalAmount, cashTendered } = req.body;
+    const result = await paymentService.processCashPayment(
+      transactionId,
+      totalAmount,
+      cashTendered
+    );
+    res.json(result);
+  } catch (error) {
+    log.error('Cash payment failed', error);
+    res.status(500).json({ error: 'Payment failed' });
+  }
+});
+
+/**
+ * Open cash drawer
+ * POST /api/payment/cash-drawer/open
+ */
+app.post('/api/payment/cash-drawer/open', async (req: Request, res: Response) => {
+  try {
+    await receiptService.openCashDrawer();
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Failed to open cash drawer', error);
+    res.status(500).json({ error: 'Failed to open drawer' });
+  }
+});
+
+/**
+ * List Stripe Terminal readers
+ * GET /api/payment/terminals
+ */
+app.get('/api/payment/terminals', async (req: Request, res: Response) => {
+  try {
+    const terminals = await paymentService.listTerminals();
+    res.json(terminals);
+  } catch (error) {
+    log.error('Failed to list terminals', error);
+    res.status(500).json({ error: 'Failed to list terminals' });
+  }
+});
+
+// ==========================================
+// RECEIPT API
+// ==========================================
+
+/**
+ * Print receipt
+ * POST /api/receipt/print
+ */
+app.post('/api/receipt/print', async (req: Request, res: Response) => {
+  try {
+    const { orderId } = req.body;
+    const order = await orderService.getOrder(orderId);
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    await receiptService.printReceiptFromOrder(order);
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Failed to print receipt', error);
+    res.status(500).json({ error: 'Failed to print receipt' });
+  }
+});
+
+// ==========================================
+// CHANNEL WEBHOOKS
+// ==========================================
+
+/**
+ * DoorDash order webhook
+ * POST /webhooks/doordash/orders
+ */
+app.post('/webhooks/doordash/orders', async (req: Request, res: Response) => {
+  try {
+    // Verify webhook signature
+    const signature = req.get('X-DoorDash-Signature') || '';
+    const timestamp = req.get('X-DoorDash-Timestamp') || '';
+
+    const isValid = doordash.verifyWebhookSignature(
+      JSON.stringify(req.body),
+      signature,
+      timestamp
+    );
+
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    const order = await doordash.handleOrderWebhook(req.body);
+    res.json({ success: true, orderId: order?.id });
+  } catch (error) {
+    log.error('DoorDash webhook failed', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+/**
+ * Uber Eats order webhook
+ * POST /webhooks/uber/orders
+ */
+app.post('/webhooks/uber/orders', async (req: Request, res: Response) => {
+  try {
+    // Verify webhook signature
+    const signature = req.get('X-Uber-Signature') || '';
+    const timestamp = req.get('X-Uber-Timestamp') || '';
+
+    const isValid = uber.verifyWebhookSignature(
+      JSON.stringify(req.body),
+      signature,
+      timestamp
+    );
+
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    const order = await uber.handleOrderWebhook(req.body);
+    res.json({ success: true, orderId: order?.id });
+  } catch (error) {
+    log.error('Uber Eats webhook failed', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+/**
+ * Sync menu to DoorDash
+ * POST /api/channels/doordash/sync-menu
+ */
+app.post('/api/channels/doordash/sync-menu', async (req: Request, res: Response) => {
+  try {
+    await doordash.syncMenu();
+    res.json({ success: true });
+  } catch (error) {
+    log.error('DoorDash menu sync failed', error);
+    res.status(500).json({ error: 'Menu sync failed' });
+  }
+});
+
+/**
+ * Sync menu to Uber Eats
+ * POST /api/channels/uber/sync-menu
+ */
+app.post('/api/channels/uber/sync-menu', async (req: Request, res: Response) => {
+  try {
+    await uber.syncMenu();
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Uber Eats menu sync failed', error);
+    res.status(500).json({ error: 'Menu sync failed' });
   }
 });
 

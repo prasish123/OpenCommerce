@@ -29,11 +29,13 @@ const envSchema = z.object({
   DOORDASH_DEVELOPER_ID: z.string().optional(),
   DOORDASH_KEY_ID: z.string().optional(),
   DOORDASH_SIGNING_SECRET: z.string().optional(),
+  DOORDASH_WEBHOOK_SECRET: z.string().optional(),
 
   // Uber Eats
   UBER_CLIENT_ID: z.string().optional(),
   UBER_CLIENT_SECRET: z.string().optional(),
   UBER_STORE_ID: z.string().optional(),
+  UBER_WEBHOOK_SECRET: z.string().optional(),
 
   // Website
   WEBSITE_API_KEY: z.string().optional(),
@@ -46,8 +48,11 @@ const envSchema = z.object({
   STORE_ID: z.string().default('STORE_001'),
   STORE_NAME: z.string().default('Liquor River Ocala'),
   STORE_ADDRESS: z.string().default('123 Main St, Ocala, FL 34470'),
+  STORE_PHONE: z.string().optional(),
+  STORE_TERMINAL_ID: z.string().optional(),
   STORE_TAX_RATE: z.string().default('0.07'),
   STORE_TIMEZONE: z.string().default('America/New_York'),
+  STRIPE_LOCATION_ID: z.string().optional(),
 
   // Channel Markup
   MARKUP_DOORDASH: z.string().default('0.30'),
@@ -105,16 +110,21 @@ export const config = {
   },
 
   doordash: {
+    baseUrl: 'https://openapi.doordash.com',
+    apiKey: env.DOORDASH_KEY_ID,
     developerId: env.DOORDASH_DEVELOPER_ID,
     keyId: env.DOORDASH_KEY_ID,
     signingSecret: env.DOORDASH_SIGNING_SECRET,
+    webhookSecret: env.DOORDASH_WEBHOOK_SECRET,
     enabled: env.ENABLE_DOORDASH === 'true',
   },
 
   uberEats: {
+    baseUrl: 'https://api.uber.com',
     clientId: env.UBER_CLIENT_ID,
     clientSecret: env.UBER_CLIENT_SECRET,
     storeId: env.UBER_STORE_ID,
+    webhookSecret: env.UBER_WEBHOOK_SECRET,
     enabled: env.ENABLE_UBER_EATS === 'true',
   },
 
@@ -132,8 +142,19 @@ export const config = {
     id: env.STORE_ID,
     name: env.STORE_NAME,
     address: env.STORE_ADDRESS,
-    taxRate: parseFloat(env.STORE_TAX_RATE),
     timezone: env.STORE_TIMEZONE,
+    phone: env.STORE_PHONE || '',
+    terminalId: env.STORE_TERMINAL_ID || '1',
+    stripeLocationId: env.STRIPE_LOCATION_ID,
+  },
+
+  tax: {
+    salesTaxRate: parseFloat(env.STORE_TAX_RATE),
+  },
+
+  printer: {
+    vendorId: env.PRINTER_VENDOR_ID,
+    productId: env.PRINTER_PRODUCT_ID,
   },
 
   channelMarkup: {
