@@ -1,0 +1,189 @@
+# Artillery Load Test Configuration
+# Test 15 TPS baseline and peak 10K TPS
+
+config:
+  target: "http://localhost:3000"
+  phases:
+    # Warm-up phase: 5 TPS for 1 minute
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm-up"
+
+    # Baseline phase: 15 TPS for 5 minutes
+    - duration: 300
+      arrivalRate: 15
+      name: "Baseline Load (15 TPS)"
+
+    # Ramp-up phase: 15 TPS → 100 TPS over 2 minutes
+    - duration: 120
+      arrivalRate: 15
+      rampTo: 100
+      name: "Ramp-up to 100 TPS"
+
+    # High load phase: 100 TPS → 1000 TPS over 5 minutes
+    - duration: 300
+      arrivalRate: 100
+      rampTo: 1000
+      name: "Ramp-up to 1K TPS"
+
+    # Peak load phase: 1000 TPS → 10000 TPS over 2 minutes
+    - duration: 120
+      arrivalRate: 1000
+      rampTo: 10000
+      name: "Peak Load (10K TPS)"
+
+    # Sustained peak: 10K TPS for 1 minute
+    - duration: 60
+      arrivalRate: 10000
+      name: "Sustained Peak (10K TPS)"
+
+    # Cool-down: 10K TPS → 15 TPS over 2 minutes
+    - duration: 120
+      arrivalRate: 10000
+      rampTo: 15
+      name: "Cool-down"
+
+  # Performance thresholds
+  ensure:
+    # Response time (P95) should be under 200ms
+    p95: 200
+    # Response time (P99) should be under 500ms
+    p99: 500
+    # Error rate should be under 1%
+    maxErrorRate: 1
+
+  # Environment variables
+  variables:
+    storeId: "STORE-001"
+    terminalId: "TERMINAL-LOAD-TEST"
+
+  # Plugins
+  plugins:
+    statsd:
+      host: localhost
+      port: 8125
+      prefix: "opencommerce.load_test"
+
+  # HTTP defaults
+  http:
+    timeout: 10
+
+  # Processor (for custom logic)
+  processor: "./load-test-processor.js"
+
+scenarios:
+  # Scenario 1: Product Lookup (40% of traffic)
+  - name: "Product Lookup"
+    weight: 40
+    flow:
+      - get:
+          url: "/api/products/barcode/{{ $randomNumber(1000000000000, 9999999999999) }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          capture:
+            - json: "$.id"
+              as: "productId"
+      - think: 1
+
+  # Scenario 2: Complete POS Transaction (30% of traffic)
+  - name: "POS Transaction Flow"
+    weight: 30
+    beforeScenario: "login"
+    flow:
+      # Create cart
+      - post:
+          url: "/api/cart"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          json:
+            storeId: "{{ storeId }}"
+            terminalId: "{{ terminalId }}"
+          capture:
+            - json: "$.id"
+              as: "cartId"
+
+      # Add item to cart
+      - post:
+          url: "/api/cart/{{ cartId }}/items"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          json:
+            barcode: "1234567890123"
+            quantity: "{{ $randomNumber(1, 5) }}"
+
+      - think: 2
+
+      # Add another item
+      - post:
+          url: "/api/cart/{{ cartId }}/items"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          json:
+            barcode: "9876543210987"
+            quantity: "{{ $randomNumber(1, 3) }}"
+
+      - think: 3
+
+      # Checkout
+      - post:
+          url: "/api/cart/{{ cartId }}/checkout"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          json:
+            tenders:
+              - tenderType: "CREDIT_CARD"
+                amount: 100
+          capture:
+            - json: "$.transactionId"
+              as: "transactionId"
+
+      - think: 1
+
+  # Scenario 3: Order Queue Polling (20% of traffic)
+  - name: "Order Queue Polling"
+    weight: 20
+    beforeScenario: "login"
+    flow:
+      - get:
+          url: "/api/orders?limit=50"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          capture:
+            - json: "$[0].id"
+              as: "orderId"
+              ifUndefined: "skip"
+
+      - think: 5
+
+      # Update order status
+      - put:
+          url: "/api/orders/{{ orderId }}/status"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          json:
+            status: "ACCEPTED"
+          ifTrue: "orderId"
+
+      - think: 2
+
+  # Scenario 4: Analytics Dashboard (10% of traffic)
+  - name: "Analytics Dashboard"
+    weight: 10
+    beforeScenario: "login"
+    flow:
+      - get:
+          url: "/api/analytics/realtime/{{ storeId }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+
+      - get:
+          url: "/api/analytics/trending?limit=20"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+
+      - get:
+          url: "/api/analytics/channels?startDate={{ $randomDate() }}&endDate={{ $now() }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+
+      - think: 10
