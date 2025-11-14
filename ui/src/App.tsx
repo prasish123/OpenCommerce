@@ -3,6 +3,7 @@ import { Toaster } from 'sonner';
 import POSTerminal from './pages/POSTerminal';
 import OrderQueue from './pages/OrderQueue';
 import Login from './pages/Login';
+import { BackOfficePortal } from './components/BackOffice/BackOfficePortal';
 import { useAuthStore } from './store/authStore';
 
 function App() {
@@ -19,6 +20,10 @@ function App() {
         <Route
           path="/queue"
           element={isAuthenticated ? <OrderQueue /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/backoffice/*"
+          element={isAuthenticated ? <BackOfficePortal /> : <Navigate to="/login" />}
         />
         <Route path="/" element={<Navigate to={isAuthenticated ? "/queue" : "/login"} />} />
       </Routes>
