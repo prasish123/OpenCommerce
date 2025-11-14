@@ -88,6 +88,43 @@ export enum EventType {
   ELISTAR_IMPORT_STARTED = 'elistar.import.started',
   ELISTAR_IMPORT_COMPLETED = 'elistar.import.completed',
   ELISTAR_EXPORT_COMPLETED = 'elistar.export.completed',
+
+  // Transaction events
+  TRANSACTION_STARTED = 'transaction.started',
+  TRANSACTION_COMPLETED = 'transaction.completed',
+  TRANSACTION_VOIDED = 'transaction.voided',
+
+  // Website connector events
+  WEBSITE_ORDER_IMPORTED = 'website.order.imported',
+  WEBSITE_ORDER_SYNCED = 'website.order.synced',
+  WEBSITE_INVENTORY_UPDATED = 'website.inventory.updated',
+
+  // Loyalty events
+  LOYALTY_MEMBER_CREATED = 'loyalty.member.created',
+  LOYALTY_POINTS_AWARDED = 'loyalty.points.awarded',
+  LOYALTY_POINTS_REDEEMED = 'loyalty.points.redeemed',
+  LOYALTY_TIER_UPGRADED = 'loyalty.tier.upgraded',
+  LOYALTY_REWARD_REDEEMED = 'loyalty.reward.redeemed',
+
+  // Notification events
+  NOTIFICATION_SENT = 'notification.sent',
+  NOTIFICATION_FAILED = 'notification.failed',
+
+  // Tax events
+  TAX_CALCULATED = 'tax.calculated',
+  TAX_RULE_UPDATED = 'tax.rule.updated',
+
+  // Customer events
+  CUSTOMER_CREATED = 'customer.created',
+  CUSTOMER_UPDATED = 'customer.updated',
+
+  // Security/Audit events
+  SECURITY_VIOLATION = 'security.violation',
+  UNAUTHORIZED_ACCESS = 'security.unauthorized_access',
+  PASSWORD_CHANGED = 'auth.password_changed',
+  LOGIN_SUCCESS = 'auth.login_success',
+  LOGIN_FAILED = 'auth.login_failed',
+  LOGOUT = 'auth.logout',
 }
 
 // ==========================================
