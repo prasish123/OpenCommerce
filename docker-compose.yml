@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # PostgreSQL - Main database
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: opencommerce-postgres
+    environment:
+      POSTGRES_USER: opencommerce
+      POSTGRES_PASSWORD: opencommerce_dev_password
+      POSTGRES_DB: opencommerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opencommerce"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - opencommerce-network
+
+  # Redis - Cache and session store
+  redis:
+    image: redis:7-alpine
+    container_name: opencommerce-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - opencommerce-network
+
+  # Ollama - Local AI for semantic search
+  ollama:
+    image: ollama/ollama:latest
+    container_name: opencommerce-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - opencommerce-network
+
+  # OpenCommerce POS Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opencommerce-app
+    ports:
+      - "3000:3000"  # Main API
+      - "8080:8080"  # POS UI
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://opencommerce:opencommerce_dev_password@postgres:5432/opencommerce
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      PORT: 3000
+      UI_PORT: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - opencommerce-network
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  ollama-data:
+    driver: local
+
+networks:
+  opencommerce-network:
+    driver: bridge
