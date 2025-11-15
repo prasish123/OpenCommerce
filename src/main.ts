@@ -12,6 +12,7 @@ import { PaymentService } from './services/payment/payment-service';
 import { ReceiptService } from './services/receipt/receipt-service';
 import { DoorDashConnector } from './services/channels/doordash-connector';
 import { UberEatsConnector } from './services/channels/uber-eats-connector';
+import { authService } from './services/auth/auth-service';
 
 /**
  * OpenCommerce POS - Main Application
@@ -63,6 +64,108 @@ app.get('/health', async (req: Request, res: Response) => {
       status: 'unhealthy',
       reason: 'Database connection failed',
     });
+  }
+});
+
+// ==========================================
+// AUTHENTICATION & AUTHORIZATION
+// ==========================================
+
+/**
+ * Login with PIN
+ * POST /api/auth/login
+ */
+app.post('/api/auth/login', async (req: Request, res: Response) => {
+  try {
+    const { pin, terminalId } = req.body;
+
+    if (!pin || !/^\d{4,6}$/.test(pin)) {
+      return res.status(400).json({ error: 'Invalid PIN format (must be 4-6 digits)' });
+    }
+
+    const result = await authService.loginWithPIN(pin, req.ip, terminalId);
+
+    if (result.success) {
+      res.json({
+        token: result.token,
+        user: result.user,
+        sessionId: result.sessionId,
+      });
+    } else {
+      res.status(401).json({ error: result.error });
+    }
+  } catch (error) {
+    log.error('Login failed', error);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+/**
+ * Verify Manager Override
+ * POST /api/auth/verify-manager
+ *
+ * Request body:
+ * {
+ *   "pin": "5678",
+ *   "action": "transaction.void" | "price.override" | "drawer.open",
+ *   "terminalId": "POS-001"
+ * }
+ */
+app.post('/api/auth/verify-manager', async (req: Request, res: Response) => {
+  try {
+    const { pin, action, terminalId } = req.body;
+
+    if (!pin || !/^\d{4,6}$/.test(pin)) {
+      return res.status(400).json({ error: 'Invalid PIN format' });
+    }
+
+    if (!action) {
+      return res.status(400).json({ error: 'Action is required' });
+    }
+
+    const result = await authService.verifyManagerOverride(
+      pin,
+      action,
+      req.ip,
+      terminalId
+    );
+
+    if (result.success) {
+      res.json({
+        authorized: true,
+        managerId: result.managerId,
+        managerRole: result.managerRole,
+        overrideToken: result.overrideToken,
+        expiresIn: 300, // 5 minutes in seconds
+      });
+    } else {
+      res.status(403).json({
+        authorized: false,
+        error: result.error,
+      });
+    }
+  } catch (error) {
+    log.error('Manager override verification failed', error);
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+/**
+ * Logout
+ * POST /api/auth/logout
+ */
+app.post('/api/auth/logout', async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (sessionId) {
+      await authService.logout(sessionId);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    log.error('Logout failed', error);
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 
@@ -337,13 +440,62 @@ app.get('/api/cart/:cartId', async (req: Request, res: Response) => {
 });
 
 /**
- * Clear cart (void)
+ * Override item price (requires manager authorization)
+ * POST /api/cart/:cartId/items/:barcode/override-price
+ */
+app.post('/api/cart/:cartId/items/:barcode/override-price', async (req: Request, res: Response) => {
+  try {
+    const { newPrice, overrideToken, reason } = req.body;
+
+    if (!newPrice || newPrice <= 0) {
+      return res.status(400).json({ error: 'Invalid price' });
+    }
+
+    if (!overrideToken) {
+      return res.status(403).json({ error: 'Manager override required' });
+    }
+
+    // Verify override token
+    const tokenValid = await authService.verifyOverrideToken(overrideToken, 'transaction.discount');
+    if (!tokenValid.valid) {
+      return res.status(403).json({ error: 'Invalid or expired override token' });
+    }
+
+    // Apply price override
+    const cart = await cartService.overridePrice(
+      req.params.cartId,
+      req.params.barcode,
+      newPrice,
+      tokenValid.managerId!,
+      reason || 'Manager override'
+    );
+
+    res.json(cart);
+  } catch (error) {
+    log.error('Failed to override price', error);
+    res.status(500).json({ error: 'Failed to override price' });
+  }
+});
+
+/**
+ * Clear cart (void) - requires manager authorization
  * DELETE /api/cart/:cartId
  */
 app.delete('/api/cart/:cartId', async (req: Request, res: Response) => {
   try {
-    const { reason, managerId } = req.body;
-    await cartService.voidCart(req.params.cartId, reason, managerId);
+    const { reason, overrideToken } = req.body;
+
+    if (!overrideToken) {
+      return res.status(403).json({ error: 'Manager override required' });
+    }
+
+    // Verify override token
+    const tokenValid = await authService.verifyOverrideToken(overrideToken, 'transaction.void');
+    if (!tokenValid.valid) {
+      return res.status(403).json({ error: 'Invalid or expired override token' });
+    }
+
+    await cartService.voidCart(req.params.cartId, reason || 'Voided', tokenValid.managerId!);
     res.json({ success: true });
   } catch (error) {
     log.error('Failed to void cart', error);

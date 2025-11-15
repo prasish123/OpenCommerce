@@ -609,6 +609,150 @@ export class AuthenticationService {
   }
 
   /**
+   * Verify manager PIN for override actions
+   * Creates a temporary 5-minute authorization for sensitive operations
+   */
+  async verifyManagerOverride(
+    pinCode: string,
+    action: string,
+    ipAddress?: string,
+    terminalId?: string
+  ): Promise<{
+    success: boolean;
+    managerId?: string;
+    managerRole?: UserRole;
+    overrideToken?: string;
+    error?: string;
+  }> {
+    try {
+      // Get all active users with manager+ roles
+      const result = await db.query(
+        `SELECT id, username, role, pin_code, pin_salt, is_active
+         FROM auth_service.users
+         WHERE pin_code IS NOT NULL
+         AND is_active = true
+         AND role IN ('MANAGER', 'ADMIN', 'SUPER_ADMIN')`
+      );
+
+      // Find user with matching PIN
+      let matchedManager = null;
+      for (const user of result.rows) {
+        const isValid = encryptionService.verifyHash(pinCode, user.pin_code, user.pin_salt);
+        if (isValid) {
+          matchedManager = user;
+          break;
+        }
+      }
+
+      if (!matchedManager) {
+        // Log failed override attempt
+        await auditLogger.log({
+          eventType: AuditEventType.AUTHORIZATION_FAILURE,
+          severity: AuditSeverity.WARNING,
+          ipAddress,
+          description: `Failed manager override attempt for action: ${action}`,
+          metadata: {
+            action,
+            terminalId,
+            pinAttempt: `${pinCode.substring(0, 2)}**`,
+          },
+        });
+
+        return { success: false, error: 'Invalid manager PIN' };
+      }
+
+      // Check if user has permission for this action
+      const hasPermission = this.hasRolePermission(matchedManager.role, action);
+      if (!hasPermission) {
+        await auditLogger.log({
+          eventType: AuditEventType.AUTHORIZATION_FAILURE,
+          severity: AuditSeverity.WARNING,
+          userId: matchedManager.id,
+          username: matchedManager.username,
+          ipAddress,
+          description: `Manager lacks permission for action: ${action}`,
+          metadata: {
+            action,
+            role: matchedManager.role,
+            terminalId,
+          },
+        });
+
+        return {
+          success: false,
+          error: 'Insufficient permissions for this action',
+        };
+      }
+
+      // Generate short-lived override token (5 minutes)
+      const overrideToken = jwt.sign(
+        {
+          managerId: matchedManager.id,
+          action,
+          type: 'MANAGER_OVERRIDE',
+        },
+        config.security.jwtSecret,
+        { expiresIn: '5m' }
+      );
+
+      // Log successful override
+      await auditLogger.log({
+        eventType: AuditEventType.MANAGER_OVERRIDE,
+        severity: AuditSeverity.INFO,
+        userId: matchedManager.id,
+        username: matchedManager.username,
+        ipAddress,
+        description: `Manager override authorized for action: ${action}`,
+        metadata: {
+          action,
+          role: matchedManager.role,
+          terminalId,
+        },
+      });
+
+      log.info('Manager override authorized', {
+        managerId: matchedManager.id,
+        action,
+        role: matchedManager.role,
+      });
+
+      return {
+        success: true,
+        managerId: matchedManager.id,
+        managerRole: matchedManager.role,
+        overrideToken,
+      };
+    } catch (error) {
+      log.error('Manager override verification failed', error);
+      return { success: false, error: 'Verification failed. Please try again.' };
+    }
+  }
+
+  /**
+   * Verify override token is still valid
+   */
+  async verifyOverrideToken(
+    overrideToken: string,
+    expectedAction: string
+  ): Promise<{ valid: boolean; managerId?: string }> {
+    try {
+      const payload = jwt.verify(overrideToken, config.security.jwtSecret) as any;
+
+      if (payload.type !== 'MANAGER_OVERRIDE') {
+        return { valid: false };
+      }
+
+      if (payload.action !== expectedAction) {
+        return { valid: false };
+      }
+
+      return { valid: true, managerId: payload.managerId };
+    } catch (error) {
+      return { valid: false };
+    }
+  }
+
+  /**
    * Deactivate user
    */
   async deactivateUser(userId: string, deactivatedBy: string): Promise<void> {
