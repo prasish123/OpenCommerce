@@ -16,6 +16,7 @@ import { DoorDashConnector } from './services/channels/doordash-connector';
 import { UberEatsConnector } from './services/channels/uber-eats-connector';
 import { authService } from './services/auth/auth-service';
 import { initPhotoStorageService, getPhotoStorageService } from './services/security/photo-storage-service';
+import { syncService, SyncStrategy } from './services/offline/sync-service';
 
 /**
  * OpenCommerce POS - Main Application
@@ -788,6 +789,154 @@ app.post('/api/channels/uber/sync-menu', async (req: Request, res: Response) => 
   } catch (error) {
     log.error('Uber Eats menu sync failed', error);
     res.status(500).json({ error: 'Menu sync failed' });
+  }
+});
+
+// ==========================================
+// OFFLINE SYNC & CONFLICT RESOLUTION API
+// ==========================================
+
+/**
+ * Get pending conflicts
+ * GET /api/sync/conflicts/pending
+ */
+app.get('/api/sync/conflicts/pending', async (req: Request, res: Response) => {
+  try {
+    const conflicts = await syncService.getPendingConflicts();
+    res.json({ conflicts, count: conflicts.length });
+  } catch (error) {
+    log.error('Failed to get pending conflicts', error);
+    res.status(500).json({ error: 'Failed to retrieve conflicts' });
+  }
+});
+
+/**
+ * Get all conflicts (including resolved)
+ * GET /api/sync/conflicts
+ */
+app.get('/api/sync/conflicts', async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+    const conflicts = await syncService.getAllConflicts(limit);
+    res.json({ conflicts, count: conflicts.length });
+  } catch (error) {
+    log.error('Failed to get conflicts', error);
+    res.status(500).json({ error: 'Failed to retrieve conflicts' });
+  }
+});
+
+/**
+ * Manually resolve a conflict
+ * POST /api/sync/conflicts/:id/resolve
+ *
+ * Body: { resolution: 'LOCAL_WINS' | 'SERVER_WINS' | 'MERGED', resolvedBy: string }
+ */
+app.post('/api/sync/conflicts/:id/resolve', async (req: Request, res: Response) => {
+  try {
+    const { resolution, resolvedBy } = req.body;
+    const conflictId = req.params.id;
+
+    if (!resolution || !resolvedBy) {
+      return res.status(400).json({ error: 'resolution and resolvedBy are required' });
+    }
+
+    if (!['LOCAL_WINS', 'SERVER_WINS', 'MERGED'].includes(resolution)) {
+      return res.status(400).json({ error: 'Invalid resolution. Must be LOCAL_WINS, SERVER_WINS, or MERGED' });
+    }
+
+    await syncService.manuallyResolveConflict(conflictId, resolution, resolvedBy);
+    res.json({ success: true, conflictId, resolution });
+  } catch (error) {
+    log.error('Failed to resolve conflict', error);
+    res.status(500).json({ error: 'Failed to resolve conflict' });
+  }
+});
+
+/**
+ * Ignore a conflict
+ * POST /api/sync/conflicts/:id/ignore
+ *
+ * Body: { resolvedBy: string }
+ */
+app.post('/api/sync/conflicts/:id/ignore', async (req: Request, res: Response) => {
+  try {
+    const { resolvedBy } = req.body;
+    const conflictId = req.params.id;
+
+    if (!resolvedBy) {
+      return res.status(400).json({ error: 'resolvedBy is required' });
+    }
+
+    await syncService.ignoreConflict(conflictId, resolvedBy);
+    res.json({ success: true, conflictId });
+  } catch (error) {
+    log.error('Failed to ignore conflict', error);
+    res.status(500).json({ error: 'Failed to ignore conflict' });
+  }
+});
+
+/**
+ * Force sync now
+ * POST /api/sync/force
+ *
+ * Body: { storeId: string, terminalId: string }
+ */
+app.post('/api/sync/force', async (req: Request, res: Response) => {
+  try {
+    const { storeId, terminalId } = req.body;
+
+    if (!storeId || !terminalId) {
+      return res.status(400).json({ error: 'storeId and terminalId are required' });
+    }
+
+    const result = await syncService.forceSyncNow(storeId, terminalId);
+    res.json({
+      success: result.success,
+      recordsSynced: result.recordsSynced,
+      conflicts: result.conflicts,
+      errors: result.errors,
+    });
+  } catch (error) {
+    log.error('Failed to force sync', error);
+    res.status(500).json({ error: 'Failed to force sync' });
+  }
+});
+
+/**
+ * Get sync status
+ * GET /api/sync/status
+ */
+app.get('/api/sync/status', async (req: Request, res: Response) => {
+  try {
+    const status = await syncService.getSyncStatus();
+    res.json(status);
+  } catch (error) {
+    log.error('Failed to get sync status', error);
+    res.status(500).json({ error: 'Failed to get sync status' });
+  }
+});
+
+/**
+ * Set sync strategy
+ * POST /api/sync/strategy
+ *
+ * Body: { strategy: 'SERVER_WINS' | 'LOCAL_WINS' | 'LAST_WRITE_WINS' | 'MANUAL' }
+ */
+app.post('/api/sync/strategy', async (req: Request, res: Response) => {
+  try {
+    const { strategy } = req.body;
+
+    if (!strategy || !Object.values(SyncStrategy).includes(strategy)) {
+      return res.status(400).json({
+        error: 'Invalid strategy. Must be one of: SERVER_WINS, LOCAL_WINS, LAST_WRITE_WINS, MANUAL',
+      });
+    }
+
+    syncService.setSyncStrategy(strategy as SyncStrategy);
+    res.json({ success: true, strategy });
+  } catch (error) {
+    log.error('Failed to set sync strategy', error);
+    res.status(500).json({ error: 'Failed to set sync strategy' });
   }
 });
 

@@ -146,6 +146,31 @@ interface OfflineDB extends DBSchema {
       lastSyncedAt: string;
     };
   };
+
+  // Sync conflicts (requires manual resolution)
+  sync_conflicts: {
+    key: string;
+    value: {
+      id: string;
+      recordId: string;
+      recordType: 'TRANSACTION' | 'PRODUCT' | 'INVENTORY' | 'PROMOTION' | 'LOYALTY';
+      conflictType: 'DUPLICATE' | 'VERSION_MISMATCH' | 'DATA_INCONSISTENCY';
+      localVersion: any;
+      serverVersion: any;
+      localTimestamp: string;
+      serverTimestamp: string;
+      status: 'PENDING' | 'RESOLVED' | 'IGNORED';
+      resolution?: 'LOCAL_WINS' | 'SERVER_WINS' | 'MERGED';
+      resolvedBy?: string;
+      resolvedAt?: string;
+      createdAt: string;
+    };
+    indexes: {
+      'by-status': string;
+      'by-type': string;
+      'by-date': string;
+    };
+  };
 }
 
 // ==========================================
@@ -211,6 +236,14 @@ export class OfflineStorageService {
           // Store config
           if (!db.objectStoreNames.contains('store_config')) {
             db.createObjectStore('store_config', { keyPath: 'storeId' });
+          }
+
+          // Sync conflicts
+          if (!db.objectStoreNames.contains('sync_conflicts')) {
+            const conflictStore = db.createObjectStore('sync_conflicts', { keyPath: 'id' });
+            conflictStore.createIndex('by-status', 'status');
+            conflictStore.createIndex('by-type', 'recordType');
+            conflictStore.createIndex('by-date', 'createdAt');
           }
         },
       });
@@ -492,6 +525,135 @@ export class OfflineStorageService {
       log.info('Cache cleared');
     } catch (error: any) {
       log.error('Failed to clear cache', { error: error.message });
+    }
+  }
+
+  /**
+   * Save a sync conflict for manual resolution
+   */
+  async saveConflict(conflict: {
+    recordId: string;
+    recordType: 'TRANSACTION' | 'PRODUCT' | 'INVENTORY' | 'PROMOTION' | 'LOYALTY';
+    conflictType: 'DUPLICATE' | 'VERSION_MISMATCH' | 'DATA_INCONSISTENCY';
+    localVersion: any;
+    serverVersion: any;
+    localTimestamp: string;
+    serverTimestamp: string;
+  }): Promise<string> {
+    if (!this.db) await this.initialize();
+
+    try {
+      const conflictId = uuidv4();
+      await this.db!.add('sync_conflicts', {
+        id: conflictId,
+        recordId: conflict.recordId,
+        recordType: conflict.recordType,
+        conflictType: conflict.conflictType,
+        localVersion: conflict.localVersion,
+        serverVersion: conflict.serverVersion,
+        localTimestamp: conflict.localTimestamp,
+        serverTimestamp: conflict.serverTimestamp,
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+      });
+
+      log.info('Conflict saved', { conflictId, recordId: conflict.recordId, type: conflict.conflictType });
+      return conflictId;
+    } catch (error: any) {
+      log.error('Failed to save conflict', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all pending conflicts
+   */
+  async getPendingConflicts(): Promise<any[]> {
+    if (!this.db) await this.initialize();
+
+    try {
+      return await this.db!.getAllFromIndex('sync_conflicts', 'by-status', 'PENDING');
+    } catch (error: any) {
+      log.error('Failed to get pending conflicts', { error: error.message });
+      return [];
+    }
+  }
+
+  /**
+   * Get all conflicts (including resolved)
+   */
+  async getAllConflicts(limit: number = 100): Promise<any[]> {
+    if (!this.db) await this.initialize();
+
+    try {
+      const conflicts = await this.db!.getAllFromIndex('sync_conflicts', 'by-date');
+      return conflicts.slice(-limit).reverse();
+    } catch (error: any) {
+      log.error('Failed to get all conflicts', { error: error.message });
+      return [];
+    }
+  }
+
+  /**
+   * Resolve a conflict
+   */
+  async resolveConflict(
+    conflictId: string,
+    resolution: 'LOCAL_WINS' | 'SERVER_WINS' | 'MERGED',
+    resolvedBy: string
+  ): Promise<void> {
+    if (!this.db) await this.initialize();
+
+    try {
+      const conflict = await this.db!.get('sync_conflicts', conflictId);
+      if (conflict) {
+        conflict.status = 'RESOLVED';
+        conflict.resolution = resolution;
+        conflict.resolvedBy = resolvedBy;
+        conflict.resolvedAt = new Date().toISOString();
+        await this.db!.put('sync_conflicts', conflict);
+
+        log.info('Conflict resolved', { conflictId, resolution, resolvedBy });
+      }
+    } catch (error: any) {
+      log.error('Failed to resolve conflict', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Ignore a conflict
+   */
+  async ignoreConflict(conflictId: string, resolvedBy: string): Promise<void> {
+    if (!this.db) await this.initialize();
+
+    try {
+      const conflict = await this.db!.get('sync_conflicts', conflictId);
+      if (conflict) {
+        conflict.status = 'IGNORED';
+        conflict.resolvedBy = resolvedBy;
+        conflict.resolvedAt = new Date().toISOString();
+        await this.db!.put('sync_conflicts', conflict);
+
+        log.info('Conflict ignored', { conflictId, resolvedBy });
+      }
+    } catch (error: any) {
+      log.error('Failed to ignore conflict', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Get conflict by ID
+   */
+  async getConflict(conflictId: string): Promise<any | null> {
+    if (!this.db) await this.initialize();
+
+    try {
+      return await this.db!.get('sync_conflicts', conflictId);
+    } catch (error: any) {
+      log.error('Failed to get conflict', { error: error.message });
+      return null;
     }
   }
 }

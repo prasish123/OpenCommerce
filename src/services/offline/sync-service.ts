@@ -181,11 +181,12 @@ export class SyncService {
 
       for (const txn of pendingTransactions) {
         try {
-          // Send to server
+          // Send to server with timestamp for conflict detection
           const response = await this.client.post('/api/sync/transactions', {
             transaction: txn,
             storeId,
             terminalId,
+            clientTimestamp: txn.createdAt,
           });
 
           if (response.status === 200 || response.status === 201) {
@@ -195,31 +196,95 @@ export class SyncService {
 
             log.info('Transaction synced', { transactionId: txn.id });
           } else if (response.status === 409) {
-            // Conflict - transaction already exists on server
-            const conflict: ConflictResolution = {
-              recordId: txn.id,
-              recordType: 'TRANSACTION',
-              resolution: 'SERVER_WINS',
-              details: 'Transaction already exists on server',
-            };
-            conflicts.push(conflict);
+            // Conflict detected by server
+            const serverData = response.data;
+            const conflictResolution = await this.resolveConflict(
+              txn.id,
+              'TRANSACTION',
+              txn,
+              serverData.existingRecord,
+              txn.createdAt,
+              serverData.serverTimestamp
+            );
 
-            // Remove from local queue (server version is authoritative)
-            await offlineStorage.deletePendingTransaction(txn.id);
+            conflicts.push(conflictResolution);
+
+            // Apply resolution
+            if (conflictResolution.resolution === 'SERVER_WINS') {
+              // Server version wins, delete local
+              await offlineStorage.deletePendingTransaction(txn.id);
+            } else if (conflictResolution.resolution === 'LOCAL_WINS') {
+              // Local version wins, retry upload with force flag
+              await this.client.post('/api/sync/transactions', {
+                transaction: txn,
+                storeId,
+                terminalId,
+                force: true,
+              });
+              await offlineStorage.deletePendingTransaction(txn.id);
+              synced++;
+            } else if (conflictResolution.resolution === 'MANUAL_REQUIRED') {
+              // Save to conflict queue
+              await offlineStorage.saveConflict({
+                recordId: txn.id,
+                recordType: 'TRANSACTION',
+                conflictType: 'DUPLICATE',
+                localVersion: txn,
+                serverVersion: serverData.existingRecord,
+                localTimestamp: txn.createdAt,
+                serverTimestamp: serverData.serverTimestamp,
+              });
+            }
           }
         } catch (error: any) {
           // Network error or server error
-          await offlineStorage.updateSyncAttempt(txn.id, error.message);
-          errors.push(`Transaction ${txn.id}: ${error.message}`);
+          if (error.response?.status === 409) {
+            // Conflict - handle it
+            const serverData = error.response.data;
+            const conflictResolution = await this.resolveConflict(
+              txn.id,
+              'TRANSACTION',
+              txn,
+              serverData.existingRecord,
+              txn.createdAt,
+              serverData.serverTimestamp
+            );
+            conflicts.push(conflictResolution);
 
-          // If too many failed attempts (>10), flag for manual review
-          if (txn.syncAttempts >= 10) {
-            conflicts.push({
-              recordId: txn.id,
-              recordType: 'TRANSACTION',
-              resolution: 'MANUAL_REQUIRED',
-              details: `Failed to sync after ${txn.syncAttempts} attempts`,
-            });
+            if (conflictResolution.resolution === 'MANUAL_REQUIRED') {
+              await offlineStorage.saveConflict({
+                recordId: txn.id,
+                recordType: 'TRANSACTION',
+                conflictType: 'DUPLICATE',
+                localVersion: txn,
+                serverVersion: serverData.existingRecord,
+                localTimestamp: txn.createdAt,
+                serverTimestamp: serverData.serverTimestamp,
+              });
+            }
+          } else {
+            await offlineStorage.updateSyncAttempt(txn.id, error.message);
+            errors.push(`Transaction ${txn.id}: ${error.message}`);
+
+            // If too many failed attempts (>10), flag for manual review
+            if (txn.syncAttempts >= 10) {
+              conflicts.push({
+                recordId: txn.id,
+                recordType: 'TRANSACTION',
+                resolution: 'MANUAL_REQUIRED',
+                details: `Failed to sync after ${txn.syncAttempts} attempts`,
+              });
+
+              await offlineStorage.saveConflict({
+                recordId: txn.id,
+                recordType: 'TRANSACTION',
+                conflictType: 'DATA_INCONSISTENCY',
+                localVersion: txn,
+                serverVersion: null,
+                localTimestamp: txn.createdAt,
+                serverTimestamp: new Date().toISOString(),
+              });
+            }
           }
         }
       }
@@ -231,6 +296,75 @@ export class SyncService {
       log.error('Failed to sync transactions', { error: error.message });
       return { success: false, recordsSynced: synced, errors: [error.message], conflicts };
     }
+  }
+
+  /**
+   * Resolve conflict based on strategy
+   */
+  private async resolveConflict(
+    recordId: string,
+    recordType: string,
+    localVersion: any,
+    serverVersion: any,
+    localTimestamp: string,
+    serverTimestamp: string
+  ): Promise<ConflictResolution> {
+    log.info('Resolving conflict', {
+      recordId,
+      recordType,
+      strategy: this.syncStrategy,
+      localTimestamp,
+      serverTimestamp,
+    });
+
+    let resolution: 'SERVER_WINS' | 'LOCAL_WINS' | 'MERGED' | 'MANUAL_REQUIRED';
+    let details: string;
+
+    switch (this.syncStrategy) {
+      case SyncStrategy.SERVER_WINS:
+        resolution = 'SERVER_WINS';
+        details = 'Server version always takes precedence';
+        break;
+
+      case SyncStrategy.LOCAL_WINS:
+        resolution = 'LOCAL_WINS';
+        details = 'Local version always takes precedence';
+        break;
+
+      case SyncStrategy.LAST_WRITE_WINS:
+        // Compare timestamps
+        const localDate = new Date(localTimestamp);
+        const serverDate = new Date(serverTimestamp);
+
+        if (localDate > serverDate) {
+          resolution = 'LOCAL_WINS';
+          details = `Local version is newer (${localTimestamp} > ${serverTimestamp})`;
+        } else if (serverDate > localDate) {
+          resolution = 'SERVER_WINS';
+          details = `Server version is newer (${serverTimestamp} > ${localTimestamp})`;
+        } else {
+          // Same timestamp - defer to manual
+          resolution = 'MANUAL_REQUIRED';
+          details = 'Timestamps are identical, manual resolution required';
+        }
+        break;
+
+      case SyncStrategy.MANUAL:
+        resolution = 'MANUAL_REQUIRED';
+        details = 'Manual conflict resolution required per sync strategy';
+        break;
+
+      default:
+        resolution = 'MANUAL_REQUIRED';
+        details = 'Unknown sync strategy';
+    }
+
+    return {
+      recordId,
+      recordType,
+      resolution,
+      details,
+    };
   }
 
   /**
@@ -358,6 +492,80 @@ export class SyncService {
   setSyncStrategy(strategy: SyncStrategy): void {
     this.syncStrategy = strategy;
     log.info('Sync strategy changed', { strategy });
+  }
+
+  /**
+   * Get all pending conflicts
+   */
+  async getPendingConflicts(): Promise<any[]> {
+    return await offlineStorage.getPendingConflicts();
+  }
+
+  /**
+   * Get all conflicts (including resolved)
+   */
+  async getAllConflicts(limit?: number): Promise<any[]> {
+    return await offlineStorage.getAllConflicts(limit);
+  }
+
+  /**
+   * Manually resolve a conflict
+   */
+  async manuallyResolveConflict(
+    conflictId: string,
+    resolution: 'LOCAL_WINS' | 'SERVER_WINS' | 'MERGED',
+    resolvedBy: string
+  ): Promise<void> {
+    const conflict = await offlineStorage.getConflict(conflictId);
+    if (!conflict) {
+      throw new Error('Conflict not found');
+    }
+
+    log.info('Manually resolving conflict', { conflictId, resolution, resolvedBy });
+
+    // Apply the resolution
+    if (resolution === 'LOCAL_WINS') {
+      // Push local version to server with force flag
+      await this.client.post('/api/sync/transactions', {
+        transaction: conflict.localVersion,
+        force: true,
+      });
+
+      // Remove from pending queue
+      await offlineStorage.deletePendingTransaction(conflict.recordId);
+    } else if (resolution === 'SERVER_WINS') {
+      // Just remove from pending queue (server version is already there)
+      await offlineStorage.deletePendingTransaction(conflict.recordId);
+    } else if (resolution === 'MERGED') {
+      // This would require custom merge logic - for now, treat as LOCAL_WINS
+      log.warn('MERGED resolution not fully implemented, using LOCAL_WINS');
+      await this.client.post('/api/sync/transactions', {
+        transaction: conflict.localVersion,
+        force: true,
+      });
+      await offlineStorage.deletePendingTransaction(conflict.recordId);
+    }
+
+    // Mark conflict as resolved
+    await offlineStorage.resolveConflict(conflictId, resolution, resolvedBy);
+  }
+
+  /**
+   * Ignore a conflict
+   */
+  async ignoreConflict(conflictId: string, resolvedBy: string): Promise<void> {
+    const conflict = await offlineStorage.getConflict(conflictId);
+    if (!conflict) {
+      throw new Error('Conflict not found');
+    }
+
+    log.info('Ignoring conflict', { conflictId, resolvedBy });
+
+    // Remove from pending queue
+    await offlineStorage.deletePendingTransaction(conflict.recordId);
+
+    // Mark as ignored
+    await offlineStorage.ignoreConflict(conflictId, resolvedBy);
   }
 }
 
