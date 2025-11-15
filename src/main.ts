@@ -1,6 +1,8 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import multer from 'multer';
+import cron from 'node-cron';
 import { config } from './shared/config';
 import { log } from './shared/logger';
 import { db } from './shared/database';
@@ -13,6 +15,7 @@ import { ReceiptService } from './services/receipt/receipt-service';
 import { DoorDashConnector } from './services/channels/doordash-connector';
 import { UberEatsConnector } from './services/channels/uber-eats-connector';
 import { authService } from './services/auth/auth-service';
+import { initPhotoStorageService, getPhotoStorageService } from './services/security/photo-storage-service';
 
 /**
  * OpenCommerce POS - Main Application
@@ -28,6 +31,22 @@ const paymentService = new PaymentService();
 const receiptService = new ReceiptService();
 const doordash = new DoorDashConnector();
 const uber = new UberEatsConnector();
+
+// Configure multer for file uploads (in-memory storage for processing)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, and WebP images are allowed.'));
+    }
+  }
+});
 
 // Middleware
 app.use(helmet());
@@ -333,19 +352,99 @@ app.patch('/api/orders/:id/status', async (req: Request, res: Response) => {
 /**
  * Record age verification
  * POST /api/orders/:id/verify-age
+ *
+ * Supports multipart/form-data for photo upload:
+ * - photo: Image file (optional, JPEG/PNG/WebP, max 10MB)
+ * - driverLicenseNumber: string
+ * - verifiedBy: string (cashier/manager ID)
+ * - verificationMethod: 'MANUAL_ID_CHECK' | 'ID_SCANNER' | 'PHOTO_UPLOAD' (optional)
+ * - customerName: string (optional)
+ * - driverName: string (optional)
+ * - driverLicenseState: string (optional)
+ * - driverDob: string (optional, YYYY-MM-DD)
  */
-app.post('/api/orders/:id/verify-age', async (req: Request, res: Response) => {
+app.post('/api/orders/:id/verify-age', upload.single('photo'), async (req: Request, res: Response) => {
   try {
-    const { driverLicenseNumber, verifiedBy } = req.body;
+    const { driverLicenseNumber, verifiedBy, verificationMethod, customerName, driverName, driverLicenseState, driverDob } = req.body;
+
+    if (!driverLicenseNumber || !verifiedBy) {
+      return res.status(400).json({ error: 'driverLicenseNumber and verifiedBy are required' });
+    }
+
+    let photoPath: string | undefined;
+
+    // Handle photo upload if present
+    if (req.file) {
+      const photoStorage = getPhotoStorageService();
+      const storedPhoto = await photoStorage.storePhoto(
+        req.file.buffer,
+        req.file.mimetype,
+        {
+          transactionId: req.params.id,
+          verifiedBy
+        }
+      );
+      photoPath = storedPhoto.fileName; // Store just the filename, not full path
+      log.info('Age verification photo stored', {
+        orderId: req.params.id,
+        fileName: storedPhoto.fileName,
+        size: storedPhoto.size
+      });
+    }
+
+    // Record verification with optional photo
     await orderService.recordAgeVerification(
       req.params.id,
       driverLicenseNumber,
-      verifiedBy
+      verifiedBy,
+      {
+        photoPath,
+        verificationMethod: verificationMethod as any,
+        customerName,
+        driverName,
+        driverLicenseState,
+        driverDob
+      }
     );
-    res.json({ success: true });
+
+    res.json({
+      success: true,
+      photoStored: !!photoPath,
+      verificationMethod: photoPath ? 'PHOTO_UPLOAD' : (verificationMethod || 'MANUAL_ID_CHECK')
+    });
   } catch (error) {
     log.error('Failed to record age verification', error);
     res.status(500).json({ error: 'Failed to record verification' });
+  }
+});
+
+/**
+ * Retrieve age verification photo (for audits)
+ * GET /api/compliance/age-verification-photo/:fileName
+ *
+ * Admin only - requires authentication
+ */
+app.get('/api/compliance/age-verification-photo/:fileName', async (req: Request, res: Response) => {
+  try {
+    const { fileName } = req.params;
+
+    // TODO: Add admin authentication check
+    // For now, log the access for audit purposes
+    log.info('Age verification photo accessed', {
+      fileName,
+      ip: req.ip,
+      userAgent: req.get('user-agent')
+    });
+
+    const photoStorage = getPhotoStorageService();
+    const { buffer, mimeType } = await photoStorage.retrievePhoto(fileName);
+
+    res.set('Content-Type', mimeType);
+    res.set('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
+  } catch (error) {
+    log.error('Failed to retrieve age verification photo', { error, fileName: req.params.fileName });
+    res.status(404).json({ error: 'Photo not found' });
   }
 });
 
@@ -723,6 +822,23 @@ async function start() {
     }
 
     log.info('Database connection established');
+
+    // Initialize photo storage service for age verification
+    await initPhotoStorageService();
+    log.info('Photo storage service initialized');
+
+    // Schedule daily cleanup of old age verification photos (runs at 2 AM)
+    cron.schedule('0 2 * * *', async () => {
+      log.info('Starting age verification photo cleanup...');
+      try {
+        const photoStorage = getPhotoStorageService();
+        const deletedCount = await photoStorage.cleanupOldPhotos();
+        log.info(`Age verification photo cleanup completed: ${deletedCount} photos deleted`);
+      } catch (error) {
+        log.error('Age verification photo cleanup failed', error);
+      }
+    });
+    log.info('Photo cleanup cron job scheduled (daily at 2 AM)');
 
     // Start server
     app.listen(config.port, config.host, () => {

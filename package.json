@@ -24,6 +24,7 @@
   "license": "MIT",
   "dependencies": {
     "@prisma/client": "^5.7.0",
+    "@types/multer": "^2.0.0",
     "axios": "^1.13.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
@@ -36,6 +37,7 @@
     "fast-xml-parser": "^4.3.2",
     "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
     "node-cron": "^3.0.3",
     "node-hid": "^2.1.2",
     "pg": "^8.11.3",

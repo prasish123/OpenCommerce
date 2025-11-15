@@ -330,9 +330,30 @@ export class OrderAggregationService {
   async recordAgeVerification(
     orderId: string,
     driverLicenseNumber: string,
-    verifiedBy: string
+    verifiedBy: string,
+    options?: {
+      photoPath?: string;
+      verificationMethod?: 'MANUAL_ID_CHECK' | 'ID_SCANNER' | 'PHOTO_UPLOAD';
+      customerName?: string;
+      driverName?: string;
+      driverLicenseState?: string;
+      driverDob?: string;
+      restrictedItems?: any[];
+    }
   ): Promise<void> {
     await db.transaction(async (client) => {
+      // Get order details for channel and store_id
+      const orderResult = await client.query(
+        `SELECT channel, store_id FROM order_service.retail_transactions WHERE id = $1`,
+        [orderId]
+      );
+
+      if (orderResult.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+
+      const { channel, store_id } = orderResult.rows[0];
+
       // Update order
       await client.query(
         `UPDATE order_service.retail_transactions
@@ -341,12 +362,43 @@ export class OrderAggregationService {
         [orderId]
       );
 
-      // Record in compliance log
+      // Record in compliance log with all fields
+      const verificationMethod = options?.photoPath
+        ? 'PHOTO_UPLOAD'
+        : (options?.verificationMethod || 'MANUAL_ID_CHECK');
+
       await client.query(
         `INSERT INTO compliance_service.age_verification_logs (
-          id, transaction_id, driver_license_number, verified_by, verified_at
-        ) VALUES ($1, $2, $3, $4, NOW())`,
-        [uuidv4(), orderId, driverLicenseNumber, verifiedBy]
+          id,
+          transaction_id,
+          order_channel,
+          customer_name,
+          driver_name,
+          driver_license_number,
+          driver_license_state,
+          driver_dob,
+          verification_method,
+          verified_by,
+          verified_at,
+          id_photo_url,
+          restricted_items,
+          store_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12, $13)`,
+        [
+          uuidv4(),
+          orderId,
+          channel,
+          options?.customerName || null,
+          options?.driverName || null,
+          driverLicenseNumber,
+          options?.driverLicenseState || null,
+          options?.driverDob || null,
+          verificationMethod,
+          verifiedBy,
+          options?.photoPath || null,
+          options?.restrictedItems ? JSON.stringify(options.restrictedItems) : null,
+          store_id
+        ]
       );
 
       // Record event
@@ -358,7 +410,11 @@ export class OrderAggregationService {
           uuidv4(),
           orderId,
           EventType.AGE_VERIFIED,
-          JSON.stringify({ verifiedBy }),
+          JSON.stringify({
+            verifiedBy,
+            verificationMethod,
+            hasPhoto: !!options?.photoPath
+          }),
         ]
       );
     });
