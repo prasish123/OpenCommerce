@@ -276,8 +276,8 @@ export class ReceiptService {
   async printReceiptFromOrder(order: UnifiedOrder): Promise<{ printed: boolean; receiptText: string }> {
     const receiptData: ReceiptData = {
       transactionId: order.id,
-      businessDate: new Date(order.createdAt || new Date()).toLocaleDateString(),
-      timestamp: new Date(order.createdAt || new Date()).toLocaleTimeString(),
+      businessDate: new Date(order.orderedAt || new Date()).toLocaleDateString(),
+      timestamp: new Date(order.orderedAt || new Date()).toLocaleTimeString(),
       storeName: config.store.name,
       storeAddress: config.store.address || '',
       items: order.items.map((item) => ({
@@ -287,7 +287,7 @@ export class ReceiptService {
         extendedPrice: item.extendedPrice,
       })),
       subtotal: order.subtotal || 0,
-      taxAmount: order.taxAmount || 0,
+      taxAmount: order.taxTotal || 0,
       totalAmount: order.totalAmount,
       tenders: [
         {

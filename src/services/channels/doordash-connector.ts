@@ -71,6 +71,8 @@ export class DoorDashConnector {
       const unifiedOrder: Omit<UnifiedOrder, 'id'> = {
         channel: OrderChannel.DOORDASH,
         status: OrderStatus.NEW,
+        storeId: config.store.id,
+        businessDate: new Date(),
         externalOrderId: payload.order_id,
         customer: {
           name: `${payload.customer.first_name} ${payload.customer.last_name}`,
@@ -90,19 +92,23 @@ export class DoorDashConnector {
             }
 
             return {
+              sequenceNumber: 0, // Will be set later
               productId: product.id,
               barcode: product.barcode,
               description: product.description,
               quantity: item.quantity,
               unitPrice: item.unit_price,
               extendedPrice: item.unit_price * item.quantity,
+              taxAmount: 0, // Tax calculated separately
               requiresAgeVerification: product.requiresAgeVerification,
             };
           })
         ),
         subtotal: payload.subtotal,
-        taxAmount: payload.tax,
+        taxTotal: payload.tax,
         totalAmount: payload.total,
+        containsAlcohol: false, // Will be determined by products
+        orderedAt: new Date(),
         delivery: {
           address: `${payload.delivery_address.street}, ${payload.delivery_address.city}, ${payload.delivery_address.state} ${payload.delivery_address.zip}`,
           driver: payload.dasher
@@ -210,7 +216,7 @@ export class DoorDashConnector {
               price: Math.round((product as any).price * 100), // Convert to cents
               is_available: true,
               alcohol: product.requiresAgeVerification || false,
-              image_url: product.imageUrl || null,
+              image_url: null, // Image URL not available in Product type
             })),
           })),
         },

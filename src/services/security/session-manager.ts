@@ -1,6 +1,6 @@
 import { db } from '../../shared/database';
 import { log } from '../../shared/logger';
-import { auditLogger, AuditEventType } from './audit-logger';
+import { auditLogger, AuditEventType, AuditSeverity } from './audit-logger';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 
@@ -169,7 +169,7 @@ export class SessionManager {
 
       await auditLogger.log({
         eventType,
-        severity: 'INFO',
+        severity: AuditSeverity.INFO,
         userId: user_id,
         description: `Session terminated: ${reason}`,
         metadata: { sessionId, reason },
@@ -211,7 +211,7 @@ export class SessionManager {
 
     await auditLogger.log({
       eventType: AuditEventType.SECURITY_VIOLATION,
-      severity: 'WARNING',
+      severity: AuditSeverity.WARNING,
       userId,
       description: `All sessions terminated: ${reason}`,
       metadata: { reason },
@@ -322,7 +322,7 @@ export class SessionManager {
     // Audit log
     await auditLogger.log({
       eventType: AuditEventType.SECURITY_VIOLATION,
-      severity: 'CRITICAL',
+      severity: AuditSeverity.CRITICAL,
       userId,
       username,
       description: `Account locked: ${reason}`,
@@ -360,7 +360,7 @@ export class SessionManager {
 
     await auditLogger.log({
       eventType: AuditEventType.PRIVILEGE_ESCALATION,
-      severity: 'WARNING',
+      severity: AuditSeverity.WARNING,
       username,
       description: `Account unlocked by admin`,
       metadata: { unlockedBy },

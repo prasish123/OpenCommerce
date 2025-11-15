@@ -145,6 +145,8 @@ export class UberEatsConnector {
       const unifiedOrder: Omit<UnifiedOrder, 'id'> = {
         channel: OrderChannel.UBER_EATS,
         status: OrderStatus.NEW,
+        storeId: config.store.id,
+        businessDate: new Date(),
         externalOrderId: order.id,
         customer: {
           name: `${order.eater.first_name} ${order.eater.last_name}`,
@@ -163,19 +165,23 @@ export class UberEatsConnector {
             }
 
             return {
+              sequenceNumber: 0, // Will be set later
               productId: product.id,
               barcode: product.barcode,
               description: product.description,
               quantity: item.quantity,
               unitPrice: item.price.unit_price.amount / 100, // Convert from cents
               extendedPrice: item.price.total / 100, // Convert from cents
+              taxAmount: 0, // Tax calculated separately
               requiresAgeVerification: product.requiresAgeVerification,
             };
           })
         ),
         subtotal: order.payment.charges.sub_total.amount / 100,
-        taxAmount: order.payment.charges.tax.amount / 100,
+        taxTotal: order.payment.charges.tax.amount / 100,
         totalAmount: order.payment.charges.total.amount / 100,
+        containsAlcohol: false, // Will be determined by products
+        orderedAt: new Date(),
         delivery: order.delivery
           ? {
               address: `${order.delivery.location.address.street_address.join(', ')}, ${
@@ -394,7 +400,7 @@ export class UberEatsConnector {
                 is_alcohol: true,
               }
             : undefined,
-          image_url: product.imageUrl || null,
+          image_url: null, // Image URL not available in Product type
         })),
       };
 

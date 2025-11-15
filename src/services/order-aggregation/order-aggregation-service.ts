@@ -69,7 +69,7 @@ export class OrderAggregationService {
             order.customer?.phone || null,
             order.customer?.email || null,
             order.subtotal,
-            order.taxAmount || 0,
+            order.taxTotal || 0,
             order.totalAmount,
             containsAlcohol,
             order.ageVerified || false,
@@ -125,6 +125,11 @@ export class OrderAggregationService {
       await eventBus.publish({
         type: EventType.ORDER_CREATED,
         aggregateId: orderId,
+        metadata: {
+          userId: order.cashierId,
+          storeId: order.storeId,
+          terminalId: order.terminalId,
+        },
         data: {
           channel: order.channel,
           status,
@@ -198,6 +203,9 @@ export class OrderAggregationService {
     await eventBus.publish({
       type: EventType.ORDER_UPDATED,
       aggregateId: orderId,
+      metadata: {
+        userId,
+      },
       data: { status },
     });
 
@@ -211,9 +219,11 @@ export class OrderAggregationService {
     const result = await db.query(
       `SELECT
         t.id, t.channel, t.status, t.external_order_id as "externalOrderId",
+        t.store_id as "storeId", t.terminal_id as "terminalId",
+        t.business_date as "businessDate",
         t.customer_name as "customerName", t.customer_phone as "customerPhone",
         t.customer_email as "customerEmail",
-        t.subtotal, t.tax_amount as "taxAmount", t.total_amount as "totalAmount",
+        t.subtotal, t.tax_amount as "taxTotal", t.total_amount as "totalAmount",
         t.contains_alcohol as "containsAlcohol", t.age_verified as "ageVerified",
         t.delivery_address as "deliveryAddress",
         t.driver_name as "driverName", t.driver_phone as "driverPhone",
@@ -232,7 +242,7 @@ export class OrderAggregationService {
     // Get line items
     const itemsResult = await db.query(
       `SELECT
-        product_id as "productId", barcode, description,
+        line_number as "lineNumber", product_id as "productId", barcode, description,
         quantity, unit_price as "unitPrice", extended_price as "extendedPrice",
         tax_amount as "taxAmount", requires_age_verification as "requiresAgeVerification"
       FROM order_service.transaction_line_items
@@ -254,6 +264,7 @@ export class OrderAggregationService {
           }
         : undefined,
       items: itemsResult.rows.map((row) => ({
+        sequenceNumber: row.lineNumber,
         productId: row.productId,
         barcode: row.barcode,
         description: row.description,
@@ -263,8 +274,11 @@ export class OrderAggregationService {
         taxAmount: parseFloat(row.taxAmount),
         requiresAgeVerification: row.requiresAgeVerification,
       })),
+      storeId: order.storeId,
+      terminalId: order.terminalId,
+      businessDate: order.businessDate,
       subtotal: parseFloat(order.subtotal),
-      taxAmount: parseFloat(order.taxAmount),
+      taxTotal: parseFloat(order.taxTotal),
       totalAmount: parseFloat(order.totalAmount),
       containsAlcohol: order.containsAlcohol,
       ageVerified: order.ageVerified,
@@ -279,8 +293,7 @@ export class OrderAggregationService {
               : undefined,
           }
         : undefined,
-      createdAt: order.createdAt,
-      updatedAt: order.updatedAt,
+      orderedAt: order.createdAt,
     };
   }
 
@@ -315,12 +328,15 @@ export class OrderAggregationService {
       channel: row.channel,
       status: row.status,
       externalOrderId: row.externalOrderId,
+      storeId: 'STORE-001', // Default store ID for queue view
+      businessDate: new Date(),
       customer: row.customerName ? { name: row.customerName } : undefined,
       items: [], // Empty for queue view, fetch full details when needed
       subtotal: 0,
+      taxTotal: 0,
       totalAmount: parseFloat(row.totalAmount),
       containsAlcohol: row.containsAlcohol,
-      createdAt: row.createdAt,
+      orderedAt: row.createdAt,
     }));
   }
 
@@ -422,6 +438,9 @@ export class OrderAggregationService {
     await eventBus.publish({
       type: EventType.AGE_VERIFIED,
       aggregateId: orderId,
+      metadata: {
+        userId: verifiedBy,
+      },
       data: { verifiedBy },
     });
 

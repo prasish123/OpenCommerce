@@ -35,7 +35,7 @@ export class PaymentService {
 
   constructor() {
     this.stripe = new Stripe(config.stripe.secretKey, {
-      apiVersion: '2024-11-20.acacia',
+      apiVersion: '2023-10-16',
     });
   }
 
@@ -96,6 +96,7 @@ export class PaymentService {
       await eventBus.publish({
         type: EventType.PAYMENT_COMPLETED,
         aggregateId: transactionId,
+        metadata: {},
         data: {
           tenderId,
           tenderType: TenderType.CREDIT_CARD,
@@ -157,6 +158,7 @@ export class PaymentService {
       await eventBus.publish({
         type: EventType.PAYMENT_COMPLETED,
         aggregateId: transactionId,
+        metadata: {},
         data: {
           tenderId,
           tenderType: TenderType.CASH,
@@ -231,6 +233,7 @@ export class PaymentService {
       await eventBus.publish({
         type: EventType.PAYMENT_REFUNDED,
         aggregateId: transactionId,
+        metadata: {},
         data: {
           tenderId,
           amount,
