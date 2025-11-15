@@ -71,12 +71,18 @@ export class ReceiptService {
 
   /**
    * Print receipt for completed transaction
+   * Returns receipt text for display/simulation
    */
-  async printReceipt(receiptData: ReceiptData): Promise<void> {
+  async printReceipt(receiptData: ReceiptData): Promise<{ printed: boolean; receiptText: string }> {
+    const receiptText = this.generateReceiptText(receiptData);
+
     if (!this.device || !this.printer) {
-      log.warn('Printer not available, printing to console instead');
+      log.warn('Printer not available, simulating receipt print');
       this.printToConsole(receiptData);
-      return;
+      return {
+        printed: false,
+        receiptText,
+      };
     }
 
     try {
@@ -210,10 +216,19 @@ export class ReceiptService {
             });
         });
       });
+
+      return {
+        printed: true,
+        receiptText,
+      };
     } catch (error) {
       log.error('Receipt printing failed', error);
       // Fallback to console
       this.printToConsole(receiptData);
+      return {
+        printed: false,
+        receiptText,
+      };
     }
   }
 
@@ -224,7 +239,7 @@ export class ReceiptService {
     cart: Cart,
     transactionId: string,
     tenders: Array<{ type: TenderType; amount: number; changeAmount?: number }>
-  ): Promise<void> {
+  ): Promise<{ printed: boolean; receiptText: string }> {
     const receiptData: ReceiptData = {
       transactionId,
       businessDate: new Date().toLocaleDateString(),
@@ -252,13 +267,13 @@ export class ReceiptService {
       })),
     };
 
-    await this.printReceipt(receiptData);
+    return await this.printReceipt(receiptData);
   }
 
   /**
    * Print receipt from order (for online/delivery orders)
    */
-  async printReceiptFromOrder(order: UnifiedOrder): Promise<void> {
+  async printReceiptFromOrder(order: UnifiedOrder): Promise<{ printed: boolean; receiptText: string }> {
     const receiptData: ReceiptData = {
       transactionId: order.id,
       businessDate: new Date(order.createdAt || new Date()).toLocaleDateString(),
@@ -282,7 +297,7 @@ export class ReceiptService {
       ],
     };
 
-    await this.printReceipt(receiptData);
+    return await this.printReceipt(receiptData);
   }
 
   /**
@@ -395,6 +410,57 @@ export class ReceiptService {
    */
   private padLeft(text: string, length: number): string {
     return text.padStart(length, ' ');
+  }
+
+  /**
+   * Generate receipt text (for simulation/display)
+   */
+  private generateReceiptText(receiptData: ReceiptData): string {
+    let text = '\n';
+    text += '========================================\n';
+    text += `       ${receiptData.storeName}\n`;
+    text += `       ${receiptData.storeAddress}\n`;
+    text += '========================================\n';
+    text += `Date: ${receiptData.businessDate}\n`;
+    text += `Time: ${receiptData.timestamp}\n`;
+    text += `Transaction: ${receiptData.transactionId.substring(0, 8)}\n`;
+    text += '========================================\n';
+    text += 'ITEMS\n';
+    for (const item of receiptData.items) {
+      text += `${item.description}\n`;
+      text += `  ${item.quantity.toFixed(2)} @ $${item.unitPrice.toFixed(2)}`;
+      text += `  $${item.extendedPrice.toFixed(2)}\n`;
+    }
+    text += '========================================\n';
+    if (receiptData.promotions && receiptData.promotions.length > 0) {
+      text += 'PROMOTIONS\n';
+      for (const promo of receiptData.promotions) {
+        text += `${promo.description}  -$${promo.discountAmount.toFixed(2)}\n`;
+      }
+      text += '========================================\n';
+    }
+    text += `Subtotal:  $${receiptData.subtotal.toFixed(2)}\n`;
+    if (receiptData.discountTotal) {
+      text += `Discount: -$${receiptData.discountTotal.toFixed(2)}\n`;
+    }
+    text += `Tax:       $${receiptData.taxAmount.toFixed(2)}\n`;
+    text += '========================================\n';
+    text += `TOTAL:     $${receiptData.totalAmount.toFixed(2)}\n`;
+    text += '========================================\n';
+    text += 'PAYMENT\n';
+    for (const tender of receiptData.tenders) {
+      text += `${tender.type}:  $${tender.amount.toFixed(2)}\n`;
+      if (tender.changeAmount) {
+        text += `Change:    $${tender.changeAmount.toFixed(2)}\n`;
+      }
+    }
+    text += '========================================\n';
+    text += 'Thank you for your business!\n';
+    text += 'Please come again\n';
+    text += '\n';
+    text += 'Return Policy: 30 days with receipt\n';
+    text += '========================================\n';
+    return text;
   }
 
   /**

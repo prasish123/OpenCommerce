@@ -580,6 +580,7 @@ app.get('/api/payment/terminals', async (req: Request, res: Response) => {
 /**
  * Print receipt
  * POST /api/receipt/print
+ * Returns receipt text for display (simulated mode) or confirms print (hardware mode)
  */
 app.post('/api/receipt/print', async (req: Request, res: Response) => {
   try {
@@ -590,8 +591,13 @@ app.post('/api/receipt/print', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    await receiptService.printReceiptFromOrder(order);
-    res.json({ success: true });
+    const result = await receiptService.printReceiptFromOrder(order);
+    res.json({
+      success: true,
+      printed: result.printed,
+      receiptText: result.receiptText,
+      mode: result.printed ? 'hardware' : 'simulated',
+    });
   } catch (error) {
     log.error('Failed to print receipt', error);
     res.status(500).json({ error: 'Failed to print receipt' });
