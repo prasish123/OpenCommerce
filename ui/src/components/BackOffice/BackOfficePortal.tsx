@@ -4,6 +4,7 @@ import { PromotionManagement } from './PromotionManagement';
 import { StoreConfiguration } from './StoreConfiguration';
 import { SyncMonitor } from './SyncMonitor';
 import { UserManagement } from './UserManagement';
+import { ReportsDashboard } from './ReportsDashboard';
 
 /**
  * Back-office Portal
@@ -76,56 +77,8 @@ export function BackOfficePortal() {
         {activeTab === 'stores' && <StoreConfiguration />}
         {activeTab === 'sync' && <SyncMonitor />}
         {activeTab === 'users' && <UserManagement />}
-        {activeTab === 'reports' && <ReportsView />}
+        {activeTab === 'reports' && <ReportsDashboard />}
       </div>
-    </div>
-  );
-}
-
-/**
- * Reports View (placeholder)
- */
-function ReportsView() {
-  return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h2 className="text-xl font-bold text-gray-900 mb-4">Reports</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <ReportCard title="Sales Report" description="Daily, weekly, monthly sales" icon="💰" />
-        <ReportCard title="Inventory Report" description="Stock levels and movements" icon="📊" />
-        <ReportCard
-          title="Performance Report"
-          description="Terminal and cashier performance"
-          icon="📈"
-        />
-        <ReportCard
-          title="Compliance Report"
-          description="PCI-DSS and age verification"
-          icon="✅"
-        />
-        <ReportCard title="Sync Report" description="Sync status and conflicts" icon="🔄" />
-        <ReportCard title="Tax Report" description="Tax collected by jurisdiction" icon="💵" />
-      </div>
-    </div>
-  );
-}
-
-function ReportCard({
-  title,
-  description,
-  icon,
-}: {
-  title: string;
-  description: string;
-  icon: string;
-}) {
-  return (
-    <div className="border-2 border-gray-200 rounded-lg p-6 hover:border-blue-500 hover:shadow-md transition-all cursor-pointer">
-      <div className="text-4xl mb-3">{icon}</div>
-      <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-      <p className="text-sm text-gray-600 mt-1">{description}</p>
-      <button className="mt-4 text-blue-600 text-sm font-medium hover:text-blue-700">
-        Generate Report →
-      </button>
     </div>
   );
 }

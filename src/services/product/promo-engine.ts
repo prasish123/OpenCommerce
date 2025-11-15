@@ -81,7 +81,7 @@ export class PromoEngine {
           break;
 
         case PromotionType.BOGO:
-          ({ discount, affectedItems } = this.calculateBOGO(items, promo));
+          ({ discount, affectedItems } = await this.calculateBOGO(items, promo));
           break;
 
         case PromotionType.PERCENT_OFF:
@@ -261,16 +261,80 @@ export class PromoEngine {
 
   /**
    * Calculate BOGO (Buy One Get One)
+   * Examples:
+   * - Buy 1 Get 1 Free (buyQuantity=1, getQuantity=1, discountPercent=100)
+   * - Buy 2 Get 1 Free (buyQuantity=2, getQuantity=1, discountPercent=100)
+   * - Buy 1 Get 1 50% Off (buyQuantity=1, getQuantity=1, discountPercent=50)
    */
-  private calculateBOGO(
+  private async calculateBOGO(
     items: CartItem[],
     promo: Promotion
-  ): { discount: number; affectedItems: number[] } {
-    const { itemListId, discountPercent = 100 } = promo.rules;
+  ): Promise<{ discount: number; affectedItems: number[] }> {
+    const {
+      itemListId,
+      buyQuantity = 1,
+      getQuantity = 1,
+      discountPercent = 100,
+    } = promo.rules;
 
-    // TODO: Implement BOGO logic
-    // For now, return no discount
-    return { discount: 0, affectedItems: [] };
+    // Get eligible barcodes from item list
+    const eligibleBarcodes = await this.getItemListBarcodes(itemListId);
+
+    // Find all matching items in cart with their indices
+    const matchingItems: Array<{ index: number; item: CartItem }> = [];
+    items.forEach((item, index) => {
+      if (eligibleBarcodes.includes(item.barcode)) {
+        // Add each unit of the item separately for proper BOGO calculation
+        for (let i = 0; i < item.quantity; i++) {
+          matchingItems.push({ index, item });
+        }
+      }
+    });
+
+    // Need at least buyQuantity + getQuantity items to qualify
+    const setSize = buyQuantity + getQuantity;
+    if (matchingItems.length < setSize) {
+      return { discount: 0, affectedItems: [] };
+    }
+
+    // Calculate how many complete sets qualify
+    const sets = Math.floor(matchingItems.length / setSize);
+
+    if (sets === 0) {
+      return { discount: 0, affectedItems: [] };
+    }
+
+    // Sort items by unit price (descending) so we discount the cheapest items
+    // This is the typical BOGO behavior - customer pays full price for expensive items
+    const sortedItems = [...matchingItems].sort(
+      (a, b) => b.item.unitPrice - a.item.unitPrice
+    );
+
+    let discount = 0;
+    const affectedItems = new Set<number>();
+
+    // For each set, discount the cheapest 'getQuantity' items
+    for (let set = 0; set < sets; set++) {
+      const setStart = set * setSize;
+      const setEnd = setStart + setSize;
+      const setItems = sortedItems.slice(setStart, setEnd);
+
+      // Discount the last 'getQuantity' items in each set (the cheapest ones)
+      const itemsToDiscount = setItems.slice(-getQuantity);
+
+      itemsToDiscount.forEach(({ index, item }) => {
+        const itemDiscount = item.unitPrice * (discountPercent / 100);
+        discount += itemDiscount;
+        affectedItems.add(index);
+      });
+
+      // Mark all items in the set as affected (for display purposes)
+      setItems.forEach(({ index }) => {
+        affectedItems.add(index);
+      });
+    }
+
+    return { discount, affectedItems: Array.from(affectedItems) };
   }
 
   /**
