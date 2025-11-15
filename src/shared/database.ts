@@ -35,13 +35,13 @@ class Database {
   /**
    * Execute a query
    */
-  async query<T = any>(
+  async query(
     text: string,
     params?: any[]
-  ): Promise<QueryResult<T>> {
+  ): Promise<QueryResult<any>> {
     const start = Date.now();
     try {
-      const result = await this.pool.query<T>(text, params);
+      const result = await this.pool.query(text, params);
       const duration = Date.now() - start;
 
       if (duration > 1000) {

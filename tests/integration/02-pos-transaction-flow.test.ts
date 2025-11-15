@@ -65,7 +65,7 @@ describe('POS Transaction Flow', () => {
     await db.query(`DELETE FROM inventory_service.inventory WHERE product_id = $1`, [productId]);
     await db.query(`DELETE FROM product_service.products WHERE id = $1`, [productId]);
     await db.query(`DELETE FROM auth_service.users WHERE id = $1`, [userId]);
-    await db.end();
+    await db.close();
   });
 
   describe('Complete Transaction Flow', () => {

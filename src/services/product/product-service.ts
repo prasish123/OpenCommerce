@@ -1,5 +1,4 @@
 import { db } from '../../shared/database';
-import { log } from '../../shared/logger';
 import { Product, OrderChannel } from '../../shared/types';
 import { config } from '../../shared/config';
 import { PromoEngine, CartItem } from './promo-engine';

@@ -27,7 +27,7 @@ describe('Authentication Flow', () => {
   afterAll(async () => {
     // Cleanup
     await db.query(`DELETE FROM auth_service.users WHERE id = $1`, [testUserId]);
-    await db.end();
+    await db.close();
   });
 
   describe('POST /api/auth/login', () => {

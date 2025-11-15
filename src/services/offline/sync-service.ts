@@ -572,11 +572,5 @@ export class SyncService {
 // Singleton instance
 export const syncService = new SyncService();
 
-// EventType additions needed in shared/types.ts
-declare module '../../shared/types' {
-  enum EventType {
-    SYNC_STARTED = 'sync.started',
-    SYNC_COMPLETED = 'sync.completed',
-    SYNC_FAILED = 'sync.failed',
-  }
-}
+// EventType additions are already in shared/types.ts
+// SYNC_STARTED, SYNC_COMPLETED, SYNC_FAILED, SYNC_CONFLICT, etc.
